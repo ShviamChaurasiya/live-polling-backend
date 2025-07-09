@@ -1,3 +1,4 @@
+const { Op } = require("sequelize");
 const Poll = require("../models/Poll");
 const Option = require("../models/Option");
 const Teacher = require("../models/Teacher");
@@ -5,10 +6,15 @@ const Teacher = require("../models/Teacher");
 // ✅ Create a new poll
 exports.createPoll = async (pollData) => {
   try {
-    console.log("📩 Creating poll for teacher:", pollData.teacherUsername);
+    console.log("📩 Creating poll for:", pollData.teacherUsername);
 
+    // 🔍 Find teacher by username (case-insensitive)
     const teacher = await Teacher.findOne({
-      where: { username: pollData.teacherUsername },
+      where: {
+        username: {
+          [Op.iLike]: pollData.teacherUsername,
+        },
+      },
     });
 
     if (!teacher) {
@@ -16,14 +22,16 @@ exports.createPoll = async (pollData) => {
       throw new Error("Teacher not found");
     }
 
-    const existingActivePoll = await Poll.findOne({
+    // 🚫 Prevent multiple active polls per teacher
+    const existingPoll = await Poll.findOne({
       where: { TeacherId: teacher.id, status: "active" },
     });
 
-    if (existingActivePoll) {
-      throw new Error("An active poll already exists. Complete it before starting a new one.");
+    if (existingPoll) {
+      throw new Error("An active poll already exists. Complete it before creating a new one.");
     }
 
+    // ✅ Create new poll
     const newPoll = await Poll.create({
       question: pollData.question,
       timer: pollData.timer || 60,
@@ -31,15 +39,17 @@ exports.createPoll = async (pollData) => {
       TeacherId: teacher.id,
     });
 
-    const pollOptions = pollData.options.map((option) => ({
+    // ✅ Create options
+    const formattedOptions = pollData.options.map((option) => ({
       text: option.text,
       correct: !!option.correct,
       votes: 0,
       PollId: newPoll.id,
     }));
 
-    await Option.bulkCreate(pollOptions);
+    await Option.bulkCreate(formattedOptions);
 
+    // ✅ Fetch poll with options
     const pollWithOptions = await Poll.findOne({
       where: { id: newPoll.id },
       include: {
@@ -48,6 +58,8 @@ exports.createPoll = async (pollData) => {
       },
     });
 
+    console.log("🟢 Poll created successfully:", newPoll.id);
+
     return {
       id: pollWithOptions.id,
       question: pollWithOptions.question,
@@ -55,7 +67,7 @@ exports.createPoll = async (pollData) => {
       options: pollWithOptions.Options,
     };
   } catch (error) {
-    console.error("❌ Error creating poll:", error.message);
+    console.error("❌ Error in createPoll:", error.message);
     throw error;
   }
 };
@@ -71,20 +83,20 @@ exports.voteOnOption = async (pollId, optionText) => {
     });
 
     if (!option) {
-      console.warn(`⚠️ Option "${optionText}" not found for poll ID ${pollId}`);
+      console.warn(`⚠️ Option not found: "${optionText}" in poll ${pollId}`);
       return;
     }
 
     option.votes += 1;
     await option.save();
 
-    console.log(`🗳️ Vote registered for "${option.text}" in Poll ID: ${pollId}`);
+    console.log(`🗳️ Vote recorded for "${option.text}" (Poll ${pollId})`);
   } catch (err) {
-    console.error("❌ Error while voting:", err.message);
+    console.error("❌ Error in voteOnOption:", err.message);
   }
 };
 
-// ✅ Get all polls for a teacher
+// ✅ Get poll history for a teacher
 exports.getPolls = async (req, res) => {
   const { teacherUsername } = req.params;
 
@@ -93,11 +105,17 @@ exports.getPolls = async (req, res) => {
       return res.status(400).json({ error: "Teacher username is required" });
     }
 
+    // 🔍 Find teacher (case-insensitive)
     const teacher = await Teacher.findOne({
-      where: { username: teacherUsername },
+      where: {
+        username: {
+          [Op.iLike]: teacherUsername,
+        },
+      },
     });
 
     if (!teacher) {
+      console.warn("❌ Teacher not found:", teacherUsername);
       return res.status(404).json({ error: "Teacher not found" });
     }
 
@@ -113,9 +131,9 @@ exports.getPolls = async (req, res) => {
     console.log(`📚 ${polls.length} poll(s) found for ${teacherUsername}`);
     return res.status(200).json({ data: polls });
   } catch (err) {
-    console.error("❌ Error fetching poll history:", err.message);
+    console.error("❌ Error in getPolls:", err.message);
     return res.status(500).json({
-      error: "Failed to fetch polls",
+      error: "Failed to fetch poll history",
       details: err.message,
     });
   }
